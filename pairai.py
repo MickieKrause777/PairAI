@@ -28,6 +28,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -262,7 +263,7 @@ def run(cmd, cwd=None, timeout=60):
 
 
 def have(tool):
-    return run(["which", tool])[0] == 0
+    return shutil.which(tool) is not None
 
 
 class Budget:
@@ -368,7 +369,9 @@ class OpenChecks:
         self.path.write_text(json.dumps(persisted, indent=2), encoding="utf-8")
 
     def add(self, key, text, flagged):
-        entry = OpenCheck(uid=uuid.uuid4().hex[:12], key=key, text=text, flagged=flagged)
+        entry = OpenCheck(
+            uid=uuid.uuid4().hex[:12], key=key, text=text, flagged=flagged
+        )
         self.items.append(entry)
         if flagged:
             self._save()
@@ -534,7 +537,13 @@ class Navigator:
                 if self.lang == "en"
                 else "Wiederkehrende Schwaechen dieses Entwicklers, zuerst pruefen:"
             )
-            ctx = "\n" + label + "\n" + "\n".join(f"- {w}" for w in self.weaknesses) + "\n"
+            ctx = (
+                "\n"
+                + label
+                + "\n"
+                + "\n".join(f"- {w}" for w in self.weaknesses)
+                + "\n"
+            )
         if extra_context:
             ctx += "\n" + extra_context + "\n"
         prompt = f"{ctx}\nCurrent changes:\n\n```diff\n{diff}\n```"
@@ -554,14 +563,18 @@ class Navigator:
         for path in self._touched_files_from_diff(diff):
             content = build_file_context(path)
             if content is not None:
-                parts.append(f"--- {path.relative_to(self.root)} (full file) ---\n{content}")
+                parts.append(
+                    f"--- {path.relative_to(self.root)} (full file) ---\n{content}"
+                )
         project = build_project_context(self.root)
         if project:
             parts.append("--- Project context ---\n" + project)
         return "\n\n".join(parts)
 
     def _ask_reply(self, entry, reply_text):
-        prompt = f"The Navigator asked:\n{entry.text}\n\nThe Driver replied:\n{reply_text}\n"
+        prompt = (
+            f"The Navigator asked:\n{entry.text}\n\nThe Driver replied:\n{reply_text}\n"
+        )
         system_prompt = SYSTEM_PROMPTS[self.lang]["reply"]
         code, out, err = self._call_claude(prompt, system_prompt)
         if code != 0:
