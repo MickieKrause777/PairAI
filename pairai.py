@@ -31,7 +31,9 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 from collections import deque
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from threading import Timer
 
@@ -47,6 +49,8 @@ DEFAULT_IDLE_SECONDS = 8  # how long you can pause before the passive Nudge fire
 MIN_CHANGED_LINES = 3  # ignore smaller changes (Nudge only — Ask always runs)
 MAX_DIFF_LINES = 160  # cap on the context sent out
 DEFAULT_BUDGET = 15  # LLM calls per hour, Nudges only
+FILE_CONTEXT_CAP = 400  # touched-file full content sent only up to this many lines
+PROJECT_CONTEXT_BUDGET = 300  # CONTEXT.md + ADRs, combined line budget
 AI_HEURISTIC_MULTIPLIER = 3  # a diff this many times your rolling average size...
 AI_HEURISTIC_FLOOR = 40  # ...and at least this many changed lines...
 WEAKNESS_PROMOTE_THRESHOLD = 3  # ...gets treated as a Flagged (likely AI) change
@@ -129,6 +133,15 @@ Format:
 
 Severity is one of: blocker, important, minor.
 No preamble, no closing remarks, no encouragement.""",
+        "reply": """You are the Navigator, evaluating whether the Driver's reply
+demonstrates real understanding of a change you questioned earlier.
+
+Absolute rule: you never write code, never give the answer yourself.
+
+If the reply shows genuine understanding, reply with exactly: RESOLVED
+
+Otherwise, ask exactly one follow-up question that probes the specific gap
+in their explanation. One sentence, no preamble, no code.""",
     },
     "de": {
         "default": """Du bist Navigator in einer Pair-Programming-Session. Der Mensch
@@ -177,6 +190,15 @@ Format:
 
 Schweregrad ist eines von: blocker, wichtig, klein.
 Keine Einleitung, kein Abschluss, keine Ermutigung.""",
+        "reply": """Du bist Navigator und pruefst, ob die Antwort des Drivers
+echtes Verstaendnis fuer eine Aenderung zeigt, die du zuvor hinterfragt hast.
+
+Absolute Regel: Du schreibst niemals Code, gibst niemals die Antwort selbst.
+
+Wenn die Antwort echtes Verstaendnis zeigt, antworte exakt: RESOLVED
+
+Sonst stelle genau eine Rueckfrage, die gezielt die Luecke in der Erklaerung
+prueft. Ein Satz, keine Einleitung, kein Code.""",
     },
 }
 
@@ -198,6 +220,9 @@ MSG = {
         "tag_lint": "lint",
         "tag_navigator": "navigator",
         "calls_left": "{n} calls left",
+        "unanswered_checks": "{n} unanswered Understanding Check(s) from last session",
+        "check_resolved": "(understanding check resolved)",
+        "check_unresolved": "(understanding check closed — still unclear, worth revisiting)",
     },
     "de": {
         "no_git": "Kein Git-Repo — der Navigator braucht Diffs.",
@@ -216,6 +241,9 @@ MSG = {
         "tag_lint": "lint",
         "tag_navigator": "navigator",
         "calls_left": "{n} Calls uebrig",
+        "unanswered_checks": "{n} unbeantwortete Verstaendnisfrage(n) aus der letzten Session",
+        "check_resolved": "(Verstaendnisfrage geklaert)",
+        "check_unresolved": "(Verstaendnisfrage abgeschlossen — noch unklar, lohnt einen Blick)",
     },
 }
 
@@ -261,11 +289,122 @@ class Budget:
         return self.limit - len(self.calls)
 
 
+def build_file_context(path, cap=FILE_CONTEXT_CAP):
+    """Full content of a touched file, or None if unreadable/too large —
+    callers then fall back to diff-only for that file."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if len(text.splitlines()) > cap:
+        return None
+    return text
+
+
+def build_project_context(root, adr_budget=PROJECT_CONTEXT_BUDGET):
+    """This project's own CONTEXT.md (in full) plus its most recent ADRs,
+    most-recent-first by filename, sharing one combined line budget."""
+    parts = []
+    budget = adr_budget
+    context_md = root / "CONTEXT.md"
+    if context_md.exists():
+        try:
+            text = context_md.read_text(encoding="utf-8")
+        except OSError:
+            text = None
+        if text is not None:
+            parts.append(text)
+            budget -= len(text.splitlines())
+    adr_dir = root / "docs" / "adr"
+    if adr_dir.is_dir():
+        for adr in sorted(adr_dir.glob("*.md"), reverse=True):
+            try:
+                text = adr.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            lines = len(text.splitlines())
+            if lines > budget:
+                break
+            parts.append(text)
+            budget -= lines
+    return "\n\n".join(parts)
+
+
+@dataclass
+class OpenCheck:
+    """A single Finding awaiting a Driver reply."""
+
+    uid: str
+    key: str
+    text: str
+    flagged: bool
+    resolved: bool = False
+    followups: int = 0
+
+
+class OpenChecks:
+    """Findings awaiting a Driver reply, threaded LIFO — the Driver's next
+    reply always answers the most recently asked one. Only Flagged
+    (Understanding Check) entries persist across restarts; ordinary Finding
+    replies are session-only."""
+
+    def __init__(self, root):
+        self.root = root
+        self.path = root / ".review" / "open_checks.json"
+        self.items = self._load()
+
+    def _load(self):
+        if not self.path.exists():
+            return []
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return []
+        return [OpenCheck(**e) for e in raw]
+
+    def _save(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        persisted = [asdict(e) for e in self.items if e.flagged]
+        self.path.write_text(json.dumps(persisted, indent=2), encoding="utf-8")
+
+    def add(self, key, text, flagged):
+        entry = OpenCheck(uid=uuid.uuid4().hex[:12], key=key, text=text, flagged=flagged)
+        self.items.append(entry)
+        if flagged:
+            self._save()
+        return entry
+
+    def active(self):
+        """The most recently asked, still-open entry — or None."""
+        for entry in reversed(self.items):
+            if not entry.resolved:
+                return entry
+        return None
+
+    def resolve(self, uid):
+        for entry in self.items:
+            if entry.uid == uid:
+                entry.resolved = True
+        self._save()
+
+    def mark_followup(self, uid):
+        for entry in self.items:
+            if entry.uid == uid:
+                entry.followups += 1
+        self._save()
+
+    def open_count(self):
+        """How many Flagged Understanding Checks are still unanswered."""
+        return sum(1 for e in self.items if e.flagged and not e.resolved)
+
+
 # ---------------------------------------------------------------- Navigator
 
 
 class Navigator:
-    def __init__(self, root, model, budget, quiet_lint, lang, idle_seconds):
+    def __init__(
+        self, root, model, budget, quiet_lint, lang, idle_seconds, llm_runner=None
+    ):
         self.root = Path(root).resolve()
         self.model = model
         self.budget = Budget(budget)
@@ -273,11 +412,13 @@ class Navigator:
         self.lang = lang
         self.msg = MSG[lang]
         self.idle_seconds = idle_seconds
+        self.llm_runner = llm_runner or run
         self.seen = set()  # hashes of diffs already reviewed
         self.raised = set()  # finding keys already shown this session
         self.diff_sizes = deque(maxlen=20)  # rolling diff-size baseline
         self.weaknesses = self._load_weaknesses()
         self.history = self._load_history()
+        self.open_checks = OpenChecks(self.root)
         self.timer = None
         self.pending = set()
 
@@ -370,19 +511,8 @@ class Navigator:
 
     # -- Stage 2: LLM --------------------------------------------------
 
-    def _ask(self, diff, flagged=False):
-        ctx = ""
-        if self.weaknesses:
-            label = (
-                "Recurring weaknesses for this developer, check these first:"
-                if self.lang == "en"
-                else "Wiederkehrende Schwaechen dieses Entwicklers, zuerst pruefen:"
-            )
-            ctx = "\n" + label + "\n" + "\n".join(f"- {w}" for w in self.weaknesses) + "\n"
-        prompt = f"{ctx}\nCurrent changes:\n\n```diff\n{diff}\n```"
-
-        system_prompt = SYSTEM_PROMPTS[self.lang]["flagged" if flagged else "default"]
-        code, out, err = run(
+    def _call_claude(self, prompt, system_prompt, timeout=90):
+        return self.llm_runner(
             [
                 "claude",
                 "-p",
@@ -393,10 +523,49 @@ class Navigator:
                 self.model,
             ],
             cwd=self.root,
-            timeout=90,
+            timeout=timeout,
         )
+
+    def _ask(self, diff, extra_context="", flagged=False):
+        ctx = ""
+        if self.weaknesses:
+            label = (
+                "Recurring weaknesses for this developer, check these first:"
+                if self.lang == "en"
+                else "Wiederkehrende Schwaechen dieses Entwicklers, zuerst pruefen:"
+            )
+            ctx = "\n" + label + "\n" + "\n".join(f"- {w}" for w in self.weaknesses) + "\n"
+        if extra_context:
+            ctx += "\n" + extra_context + "\n"
+        prompt = f"{ctx}\nCurrent changes:\n\n```diff\n{diff}\n```"
+
+        system_prompt = SYSTEM_PROMPTS[self.lang]["flagged" if flagged else "default"]
+        code, out, err = self._call_claude(prompt, system_prompt)
         if code != 0:
             return None if not err else f"[error] {err.strip().splitlines()[0]}"
+        return out.strip()
+
+    def _touched_files_from_diff(self, diff):
+        paths = re.findall(r"^\+\+\+ b/(.+)$", diff, re.MULTILINE)
+        return [self.root / p for p in paths if p != "/dev/null"]
+
+    def _build_context(self, diff):
+        parts = []
+        for path in self._touched_files_from_diff(diff):
+            content = build_file_context(path)
+            if content is not None:
+                parts.append(f"--- {path.relative_to(self.root)} (full file) ---\n{content}")
+        project = build_project_context(self.root)
+        if project:
+            parts.append("--- Project context ---\n" + project)
+        return "\n\n".join(parts)
+
+    def _ask_reply(self, entry, reply_text):
+        prompt = f"The Navigator asked:\n{entry.text}\n\nThe Driver replied:\n{reply_text}\n"
+        system_prompt = SYSTEM_PROMPTS[self.lang]["reply"]
+        code, out, err = self._call_claude(prompt, system_prompt)
+        if code != 0:
+            return None
         return out.strip()
 
     # -- Output ----------------------------------------------------
@@ -480,7 +649,8 @@ class Navigator:
                 return
             self.budget.spend()
 
-        answer = self._ask(diff, flagged=is_flagged)
+        extra_context = self._build_context(diff)
+        answer = self._ask(diff, extra_context=extra_context, flagged=is_flagged)
         if not answer or answer.strip().upper().startswith("SKIP"):
             return
 
@@ -492,10 +662,44 @@ class Navigator:
                 self.raised.add(key)
                 fresh.append(line)
                 self._record_finding(key, line)
+                self.open_checks.add(key, line, is_flagged)
         if fresh:
             if is_flagged:
                 self._notice(self.msg["ai_flagged_notice"])
             self._print("\n".join(fresh))
+
+    def reply(self, text):
+        """A Driver reply to the most recently asked open Finding. Never
+        counts against the hourly budget — replying is a deliberate action,
+        same principle as manual Ask."""
+        entry = self.open_checks.active()
+        if not entry:
+            return
+        verdict = self._ask_reply(entry, text)
+        if verdict is None:
+            return
+        if verdict.strip().upper().startswith("RESOLVED"):
+            self.open_checks.resolve(entry.uid)
+            self._notice(self.msg["check_resolved"])
+            return
+        if entry.followups >= 1:
+            self.open_checks.resolve(entry.uid)
+            self._notice(self.msg["check_unresolved"])
+            return
+        self.open_checks.mark_followup(entry.uid)
+        self._print(verdict)
+
+    def handle_input(self, text):
+        """Route one line typed at the prompt: 'a' always flags-and-asks
+        (the documented shortcut, never swallowed as a reply even when a
+        check is open); non-empty text replies to an open check if there is
+        one; anything else is a plain Ask."""
+        if text.lower() == "a":
+            self.ask(mark_ai=True)
+        elif text and self.open_checks.active() is not None:
+            self.reply(text)
+        else:
+            self.ask(mark_ai=False)
 
 
 class Handler(FileSystemEventHandler):
@@ -558,6 +762,8 @@ def main():
     )
     if nav.weaknesses:
         print(f"  {msg['watching_for'].format(items=', '.join(nav.weaknesses))}")
+    if nav.open_checks.open_count():
+        print(f"  {msg['unanswered_checks'].format(n=nav.open_checks.open_count())}")
     print(f"  {msg['controls']}{C['off']}\n")
 
     try:
@@ -566,7 +772,7 @@ def main():
                 line = input()
             except EOFError:
                 break
-            nav.ask(mark_ai=line.strip().lower() == "a")
+            nav.handle_input(line.strip())
     except KeyboardInterrupt:
         pass
     obs.stop()
