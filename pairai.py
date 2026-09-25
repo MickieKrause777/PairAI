@@ -6,11 +6,11 @@ You're the Driver. This tool never writes a line of code. It watches what
 you change and speaks up when there's something worth a question — not an
 answer.
 
-    pip install watchdog
-    python pair.py .                # watch the current project
-    python pair.py . --fast         # cheaper model
-    python pair.py . --budget 10    # max. 10 LLM calls per hour
-    python pair.py . --lang de      # German instead of English
+    pip install .                   # from inside this repo, once
+    pairai .                        # watch the current project
+    pairai . --fast                 # cheaper model
+    pairai . --budget 10            # max. 10 LLM calls per hour
+    pairai . --lang de              # German instead of English
 
 While it's running:
     Enter        ask the Navigator to review right now

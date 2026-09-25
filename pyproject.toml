@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pairai"
+version = "0.1.0"
+description = "A Navigator that sits beside you while you code"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "watchdog",
+]
+
+[project.scripts]
+pairai = "pairai:main"
+
+[tool.setuptools]
+py-modules = ["pairai"]

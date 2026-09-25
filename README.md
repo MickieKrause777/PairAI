@@ -8,7 +8,19 @@ worth interrupting you for.
 ## Install
 
 ```
-pip install watchdog
+git clone <this repo>
+cd PairAI
+pip install .
+```
+
+This installs a `pairai` command on your `PATH` (works from any directory,
+not just this one). Prefer an isolated install so it doesn't clash with
+other projects' dependencies:
+
+```
+pipx install .
+# or, straight from GitHub, without cloning first:
+pipx install git+https://github.com/<owner>/PairAI
 ```
 
 You also need the [Claude Code CLI](https://claude.com/claude-code)
@@ -18,7 +30,7 @@ questions.
 ## Run it
 
 ```
-python pair.py .
+pairai .
 ```
 
 Point it at any git repo — not just this one (see [Using it on other
@@ -80,7 +92,7 @@ never throttled.
 ## Flags
 
 ```
-python pair.py [path] [options]
+pairai [path] [options]
 
   path              directory to watch (default: current directory)
   --model MODEL     Claude model to use (default: sonnet)
@@ -93,13 +105,13 @@ python pair.py [path] [options]
 
 ## Using it on other repositories
 
-`pair.py` isn't tied to this project. It only needs `<path>/.git` to exist —
+`pairai` isn't tied to this project. It only needs `<path>/.git` to exist —
 point it anywhere:
 
 ```
-python pair.py ~/some-other-project
+pairai ~/some-other-project
 # or, from inside that project:
-cd ~/some-other-project && python /path/to/PairAI/pair.py .
+cd ~/some-other-project && pairai .
 ```
 
 All of its memory (`.review/history.json`, `.review/weaknesses.md`) is
