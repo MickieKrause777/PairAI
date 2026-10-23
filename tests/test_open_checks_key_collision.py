@@ -1,5 +1,4 @@
 import pairai
-
 from tests.test_reply import make_llm_runner
 
 
@@ -29,7 +28,9 @@ def test_same_finding_text_across_restart_does_not_cross_resolve(git_repo):
     nav2.review(manual=True, flagged=True)
     assert nav2.open_checks.open_count() == 2  # old + new, sharing a content key
 
-    nav2.reply("because True branch is the intended default")  # resolves only the active one
+    nav2.reply(
+        "because True branch is the intended default"
+    )  # resolves only the active one
 
     assert nav2.open_checks.open_count() == 1  # the old one must still be open
     assert nav2.open_checks.active().uid == old_check.uid

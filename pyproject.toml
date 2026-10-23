@@ -7,10 +7,15 @@ name = "pairai"
 version = "0.1.0"
 description = "A Navigator that sits beside you while you code"
 readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Fabian" }]
 requires-python = ">=3.9"
 dependencies = [
     "watchdog",
 ]
+
+[project.urls]
+Homepage = "https://github.com/MickieKrause777/PairAI"
 
 [project.scripts]
 pairai = "pairai:main"

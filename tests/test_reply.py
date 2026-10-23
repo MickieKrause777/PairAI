@@ -27,9 +27,7 @@ def test_reply_resolves_an_open_check(git_repo):
             "RESOLVED",
         ]
     )
-    nav = pairai.Navigator(
-        git_repo, "sonnet", 15, True, "en", 8, llm_runner=llm
-    )
+    nav = pairai.Navigator(git_repo, "sonnet", 15, True, "en", 8, llm_runner=llm)
 
     nav.review(manual=True, flagged=True)
     assert nav.open_checks.active() is not None

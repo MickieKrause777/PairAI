@@ -1,14 +1,14 @@
 # PairAI
 
 A pair-programming companion that sits beside you while you code. You're the
-**Driver** — you hold the keyboard. `pair.py` is the **Navigator**: it never
+**Driver** — you hold the keyboard. `pairai` is the **Navigator**: it never
 writes a line of code, only asks questions, and only when it's actually
 worth interrupting you for.
 
 ## Install
 
 ```
-git clone <this repo>
+git clone https://github.com/MickieKrause777/PairAI.git
 cd PairAI
 pip install .
 ```
@@ -20,7 +20,7 @@ other projects' dependencies:
 ```
 pipx install .
 # or, straight from GitHub, without cloning first:
-pipx install git+https://github.com/<owner>/PairAI
+pipx install git+https://github.com/MickieKrause777/PairAI
 ```
 
 You also need the [Claude Code CLI](https://claude.com/claude-code)
@@ -131,3 +131,7 @@ for why, and the condition under which that gets revisited.
 - [`CONTEXT.md`](CONTEXT.md) — the project's glossary (Driver, Navigator,
   Nudge, Ask, Finding, Weakness, ...)
 - [`docs/adr/`](docs/adr/) — architectural decisions and why they were made
+
+## License
+
+[MIT](LICENSE)

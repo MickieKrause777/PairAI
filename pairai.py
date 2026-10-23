@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pair.py — a Navigator that sits beside you while you code.
+pairai - a Navigator that sits beside you while you code.
 
 You're the Driver. This tool never writes a line of code. It watches what
 you change and speaks up when there's something worth a question — not an
@@ -255,7 +255,7 @@ MSG = {
 def run(cmd, cwd=None, timeout=60):
     try:
         r = subprocess.run(
-            cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout
+            cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False
         )
         return r.returncode, r.stdout, r.stderr
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -576,7 +576,7 @@ class Navigator:
             f"The Navigator asked:\n{entry.text}\n\nThe Driver replied:\n{reply_text}\n"
         )
         system_prompt = SYSTEM_PROMPTS[self.lang]["reply"]
-        code, out, err = self._call_claude(prompt, system_prompt)
+        code, out, _err = self._call_claude(prompt, system_prompt)
         if code != 0:
             return None
         return out.strip()
