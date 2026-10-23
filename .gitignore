@@ -3,3 +3,8 @@ __pycache__/
 .review/
 build/
 *.egg-info/
+
+# AI agent instructions (kept local)
+CLAUDE.md
+docs/agents/
+.scratch/
